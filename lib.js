@@ -13,36 +13,46 @@ const crypto = require('crypto');
 const archiver = require('archiver');
 const xmlbuilder = require('xmlbuilder');
 
-//The group name prefix identified as a component.
+// ===================== Project naming prefixes =====================
+// Align with FairyGUI project conventions (Role / Common packages).
+
+/** Ordinary reusable component */
 const componentPrefix = 'Com';
 
-//The group name prefix identified as a common button.
-const commonButtonPrefix = 'Button';
-
-//The group name prefix identified as a checkbox button.
-const checkButtonPrefix = 'CheckButton';
-
-//The group name prefix identified as a radio button.
-const radioButtonPrefix = 'RadioButton';
-
-//The group name prefix identified as a label.
+/** Label component (also a component with Label extension) */
 const labelPrefix = 'Label';
 
-//The group name prefix identified as a progress bar.
-const progressBarPrefix = 'ProgressBar';
+/** Preferred button prefix */
+const btnPrefix = 'Btn';
 
-//Short alias for progress bar (e.g. Bar_Vip).
+/** Legacy / official samples button prefix (still supported) */
+const commonButtonPrefix = 'Button';
+
+const checkButtonPrefix = 'CheckButton';
+const radioButtonPrefix = 'RadioButton';
+
+/** Progress bar (preferred) */
 const barPrefix = 'Bar';
 
-//The group name prefix identified as a slider.
+/** Legacy progress bar alias */
+const progressBarPrefix = 'ProgressBar';
+
 const sliderPrefix = 'Slider';
 
-//The layer name suffix of each status of the button.
+/** List shell → exported as component; finish as GList in FairyGUI editor */
+const listPrefix = 'List';
+
+/** Text layer preferred name prefix */
+const textPrefix = 'Text_';
+
+/** Image layer that should become a Loader (not Image) */
+const loaderPrefix = 'Loader_';
+
 const buttonStatusSuffix = ['@up', '@down', '@over', '@selectedOver'];
 
-// Special group prefixes that become package components / extensions.
-// Any OTHER PSD group (including names like Group_Xxx) becomes a FairyGUI Group
-// so hierarchy is preserved under one rule.
+// Special group prefixes → package components / extensions.
+// Any OTHER PSD group → FairyGUI Group (hierarchy).
+// Note: FairyGUI extension slots title/icon/bar/bar_v/grip/ani keep FIXED names via @suffix.
 
 exports.constants = {
     NO_PACK: 1,
@@ -404,6 +414,35 @@ function isProgressBarGroup(nodeName) {
     return startsWithPrefix(nodeName, progressBarPrefix) || startsWithPrefix(nodeName, barPrefix);
 }
 
+function isButtonGroup(nodeName) {
+    return startsWithPrefix(nodeName, btnPrefix)
+        || startsWithPrefix(nodeName, commonButtonPrefix)
+        || startsWithPrefix(nodeName, checkButtonPrefix)
+        || startsWithPrefix(nodeName, radioButtonPrefix);
+}
+
+function isLoaderLayer(nodeName, specialUsage) {
+    return specialUsage === 'icon' || startsWithPrefix(nodeName, loaderPrefix);
+}
+
+/**
+ * Node display name:
+ * - @title/@icon/@bar... → FairyGUI fixed slot names (title/icon/bar/...)
+ * - Text_* / Loader_* → keep project name
+ * - otherwise sanitized PSD name or auto id
+ */
+function resolveDisplayName(nodeName, specialUsage, fallbackId) {
+    if (specialUsage)
+        return specialUsage;
+    if (startsWithPrefix(nodeName, textPrefix) || startsWithPrefix(nodeName, loaderPrefix))
+        return sanitizeInstanceName(nodeName) || fallbackId;
+    var cleaned = sanitizeInstanceName(nodeName);
+    // Prefer meaningful names like Txt_* / Group_* if already present
+    if (cleaned && /^(Text_|Loader_|Txt_|Btn_|Com_|Label_|Bar_|List_|Slider_|Group_)/.test(cleaned))
+        return cleaned;
+    return fallbackId;
+}
+
 function createChildId() {
     return targetPackage.getNextDisplayId();
 }
@@ -444,23 +483,24 @@ function parseNode(aNode, rootNode, displayList, onElementCallback, parentGroupI
     var specialUsage = resolveSpecialUsage(nodeName);
 
     if (aNode.isGroup()) {
-        if (startsWithPrefix(nodeName, componentPrefix)) {
+        if (startsWithPrefix(nodeName, componentPrefix) || startsWithPrefix(nodeName, listPrefix)) {
+            // List_* is exported as a component shell; change to GList in FairyGUI editor.
             packageItem = createComponent(aNode);
             child = xmlbuilder.create('component');
             str = createChildId();
-            displayName = specialUsage || sanitizeInstanceName(nodeName) || str;
+            displayName = resolveDisplayName(nodeName, specialUsage, sanitizeInstanceName(nodeName) || str);
             child.att('id', str);
             child.att('name', displayName);
             child.att('src', packageItem.id);
             child.att('fileName', packageItem.name);
             child.att('xy', (aNode.left - rootNode.left) + ',' + (aNode.top - rootNode.top));
         }
-        else if (startsWithPrefix(nodeName, commonButtonPrefix) || startsWithPrefix(nodeName, checkButtonPrefix) || startsWithPrefix(nodeName, radioButtonPrefix)) {
+        else if (isButtonGroup(nodeName)) {
             instProps = {};
             packageItem = createButton(aNode, instProps);
             child = xmlbuilder.create('component');
             str = createChildId();
-            displayName = specialUsage || sanitizeInstanceName(nodeName) || str;
+            displayName = resolveDisplayName(nodeName, specialUsage, sanitizeInstanceName(nodeName) || str);
             child.att('id', str);
             child.att('name', displayName);
             child.att('src', packageItem.id);
@@ -473,7 +513,7 @@ function parseNode(aNode, rootNode, displayList, onElementCallback, parentGroupI
             packageItem = createLabel(aNode, instProps);
             child = xmlbuilder.create('component');
             str = createChildId();
-            displayName = specialUsage || sanitizeInstanceName(nodeName) || str;
+            displayName = resolveDisplayName(nodeName, specialUsage, sanitizeInstanceName(nodeName) || str);
             child.att('id', str);
             child.att('name', displayName);
             child.att('src', packageItem.id);
@@ -486,7 +526,7 @@ function parseNode(aNode, rootNode, displayList, onElementCallback, parentGroupI
             packageItem = createProgressBar(aNode);
             child = xmlbuilder.create('component');
             str = createChildId();
-            displayName = specialUsage || sanitizeInstanceName(nodeName) || str;
+            displayName = resolveDisplayName(nodeName, specialUsage, sanitizeInstanceName(nodeName) || str);
             child.att('id', str);
             child.att('name', displayName);
             child.att('src', packageItem.id);
@@ -497,7 +537,7 @@ function parseNode(aNode, rootNode, displayList, onElementCallback, parentGroupI
             packageItem = createSlider(aNode);
             child = xmlbuilder.create('component');
             str = createChildId();
-            displayName = specialUsage || sanitizeInstanceName(nodeName) || str;
+            displayName = resolveDisplayName(nodeName, specialUsage, sanitizeInstanceName(nodeName) || str);
             child.att('id', str);
             child.att('name', displayName);
             child.att('src', packageItem.id);
@@ -507,7 +547,6 @@ function parseNode(aNode, rootNode, displayList, onElementCallback, parentGroupI
         else {
             // Unified rule: every non-special PSD group → FairyGUI Group
             child = createFairyGroup(aNode, rootNode, displayList, onElementCallback, parentGroupId);
-            // createFairyGroup already applied parentGroupId; avoid double-set below
             parentGroupId = null;
         }
     }
@@ -516,7 +555,7 @@ function parseNode(aNode, rootNode, displayList, onElementCallback, parentGroupI
         if (typeTool) {
             child = xmlbuilder.create('text');
             str = createChildId();
-            displayName = specialUsage || str;
+            displayName = resolveDisplayName(nodeName, specialUsage, str);
             child.att('id', str);
             child.att('name', displayName);
             child.att('text', typeTool.textValue);
@@ -541,16 +580,17 @@ function parseNode(aNode, rootNode, displayList, onElementCallback, parentGroupI
         }
         else if (!aNode.isEmpty()) {
             packageItem = createImage(aNode);
-            if (specialUsage == 'icon')
+            var asLoader = isLoaderLayer(nodeName, specialUsage);
+            if (asLoader)
                 child = xmlbuilder.create('loader');
             else
                 child = xmlbuilder.create('image');
             str = createChildId();
-            displayName = specialUsage || str;
+            displayName = resolveDisplayName(nodeName, specialUsage, str);
             child.att('id', str);
             child.att('name', displayName);
             child.att('xy', (aNode.left - rootNode.left) + ',' + (aNode.top - rootNode.top));
-            if (specialUsage == 'icon') {
+            if (asLoader) {
                 child.att('size', aNode.width + ',' + aNode.height);
                 child.att('url', 'ui://' + targetPackage.id + packageItem.id);
             }
