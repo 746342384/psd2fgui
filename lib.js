@@ -25,8 +25,24 @@ const checkButtonPrefix = 'CheckButton';
 //The group name prefix identified as a radio button.
 const radioButtonPrefix = 'RadioButton';
 
+//The group name prefix identified as a label.
+const labelPrefix = 'Label';
+
+//The group name prefix identified as a progress bar.
+const progressBarPrefix = 'ProgressBar';
+
+//Short alias for progress bar (e.g. Bar_Vip).
+const barPrefix = 'Bar';
+
+//The group name prefix identified as a slider.
+const sliderPrefix = 'Slider';
+
 //The layer name suffix of each status of the button.
 const buttonStatusSuffix = ['@up', '@down', '@over', '@selectedOver'];
+
+// Special group prefixes that become package components / extensions.
+// Any OTHER PSD group (including names like Group_Xxx) becomes a FairyGUI Group
+// so hierarchy is preserved under one rule.
 
 exports.constants = {
     NO_PACK: 1,
@@ -148,6 +164,10 @@ function UIPackage(basePath, buildId) {
     this.resources = [];
     this.sameDataTestHelper = {};
     this.sameNameTestHelper = {};
+    this.nextDisplayIndex = 1;
+    this.getNextDisplayId = function () {
+        return 'n' + (this.nextDisplayIndex++) + '_' + this.itemIdBase;
+    };
 }
 
 function createImage(aNode, scale9Grid) {
@@ -252,6 +272,67 @@ function createButton(aNode, instProps) {
     return createPackageItem('component', aNode.get('name') + '.xml', component.end({ pretty: true }));
 }
 
+function createLabel(aNode, instProps) {
+    var component = xmlbuilder.create('component');
+    component.att('size', aNode.get('width') + ',' + aNode.get('height'));
+    component.att('extention', 'Label');
+
+    var onElementCallback = function (child, node) {
+        var nodeName = node.get('name');
+        if (nodeName.indexOf('@title') != -1) {
+            if (child.attributes['text']) {
+                instProps['@title'] = child.attributes['text'].value;
+                child.removeAttribute('text');
+            }
+        }
+        else if (nodeName.indexOf('@icon') != -1) {
+            if (child.attributes['url']) {
+                instProps['@icon'] = child.attributes['url'].value;
+                child.removeAttribute('url');
+            }
+        }
+    };
+
+    var displayList = component.ele('displayList');
+    var cnt = aNode.children().length;
+    for (var i = cnt - 1; i >= 0; i--) {
+        parseNode(aNode.children()[i], aNode, displayList, onElementCallback);
+    }
+
+    component.ele('Label');
+    return createPackageItem('component', aNode.get('name') + '.xml', component.end({ pretty: true }));
+}
+
+function createProgressBar(aNode) {
+    var component = xmlbuilder.create('component');
+    component.att('size', aNode.get('width') + ',' + aNode.get('height'));
+    component.att('extention', 'ProgressBar');
+
+    var displayList = component.ele('displayList');
+    var cnt = aNode.children().length;
+    for (var i = cnt - 1; i >= 0; i--) {
+        parseNode(aNode.children()[i], aNode, displayList);
+    }
+
+    component.ele('ProgressBar');
+    return createPackageItem('component', aNode.get('name') + '.xml', component.end({ pretty: true }));
+}
+
+function createSlider(aNode) {
+    var component = xmlbuilder.create('component');
+    component.att('size', aNode.get('width') + ',' + aNode.get('height'));
+    component.att('extention', 'Slider');
+
+    var displayList = component.ele('displayList');
+    var cnt = aNode.children().length;
+    for (var i = cnt - 1; i >= 0; i--) {
+        parseNode(aNode.children()[i], aNode, displayList);
+    }
+
+    component.ele('Slider');
+    return createPackageItem('component', aNode.get('name') + '.xml', component.end({ pretty: true }));
+}
+
 function createPackageItem(type, fileName, data) {
     var dataForHash;
     if (type == 'image') //data should a psd layer
@@ -290,55 +371,154 @@ function createPackageItem(type, fileName, data) {
     return item;
 }
 
-function parseNode(aNode, rootNode, displayList, onElementCallback) {
+function resolveSpecialUsage(nodeName) {
+    if (!nodeName)
+        return null;
+    // Order matters: @bar_v before @bar
+    if (nodeName.indexOf('@title') != -1)
+        return 'title';
+    if (nodeName.indexOf('@icon') != -1)
+        return 'icon';
+    if (nodeName.indexOf('@bar_v') != -1)
+        return 'bar_v';
+    if (nodeName.indexOf('@bar') != -1)
+        return 'bar';
+    if (nodeName.indexOf('@grip') != -1)
+        return 'grip';
+    if (nodeName.indexOf('@ani') != -1)
+        return 'ani';
+    return null;
+}
+
+function sanitizeInstanceName(name) {
+    if (!name)
+        return null;
+    return name.replace(/[\@\'\"\\\/\b\f\n\r\t\$\%\*\:\?\<\>\|]/g, '_');
+}
+
+function startsWithPrefix(nodeName, prefix) {
+    return nodeName && nodeName.indexOf(prefix) == 0;
+}
+
+function isProgressBarGroup(nodeName) {
+    return startsWithPrefix(nodeName, progressBarPrefix) || startsWithPrefix(nodeName, barPrefix);
+}
+
+function createChildId() {
+    return targetPackage.getNextDisplayId();
+}
+
+/**
+ * Unified hierarchy rule:
+ * PSD groups without special component prefixes → FairyGUI Group
+ * (covers both "Header" and "Group_Header").
+ */
+function createFairyGroup(aNode, rootNode, displayList, onElementCallback, parentGroupId) {
+    var nodeName = aNode.get('name');
+    var groupId = createChildId();
+    var displayName = sanitizeInstanceName(nodeName) || groupId;
+
+    var cnt = aNode.children().length;
+    for (var i = cnt - 1; i >= 0; i--)
+        parseNode(aNode.children()[i], rootNode, displayList, onElementCallback, groupId);
+
+    var child = xmlbuilder.create('group');
+    child.att('id', groupId);
+    child.att('name', displayName);
+    child.att('xy', (aNode.left - rootNode.left) + ',' + (aNode.top - rootNode.top));
+    child.att('size', aNode.get('width') + ',' + aNode.get('height'));
+    child.att('advanced', 'true');
+    if (parentGroupId)
+        child.att('group', parentGroupId);
+    return child;
+}
+
+function parseNode(aNode, rootNode, displayList, onElementCallback, parentGroupId) {
     var child;
     var packageItem;
     var instProps;
     var str;
+    var displayName;
 
     var nodeName = aNode.get('name');
-    var specialUsage;
-    if (nodeName.indexOf('@title') != -1)
-        specialUsage = 'title';
-    else if (nodeName.indexOf('@icon') != -1)
-        specialUsage = 'icon';
+    var specialUsage = resolveSpecialUsage(nodeName);
 
     if (aNode.isGroup()) {
-        if (nodeName.indexOf(componentPrefix) == 0) {
+        if (startsWithPrefix(nodeName, componentPrefix)) {
             packageItem = createComponent(aNode);
             child = xmlbuilder.create('component');
-            str = 'n' + (displayList.children.length + 1);
-            child.att('id', str + '_' + targetPackage.itemIdBase);
-            child.att('name', specialUsage ? specialUsage : str);
+            str = createChildId();
+            displayName = specialUsage || sanitizeInstanceName(nodeName) || str;
+            child.att('id', str);
+            child.att('name', displayName);
             child.att('src', packageItem.id);
             child.att('fileName', packageItem.name);
             child.att('xy', (aNode.left - rootNode.left) + ',' + (aNode.top - rootNode.top));
         }
-        else if (nodeName.indexOf(commonButtonPrefix) == 0 || nodeName.indexOf(checkButtonPrefix) == 0 || nodeName.indexOf(radioButtonPrefix) == 0) {
+        else if (startsWithPrefix(nodeName, commonButtonPrefix) || startsWithPrefix(nodeName, checkButtonPrefix) || startsWithPrefix(nodeName, radioButtonPrefix)) {
             instProps = {};
             packageItem = createButton(aNode, instProps);
             child = xmlbuilder.create('component');
-            str = 'n' + (displayList.children.length + 1);
-            child.att('id', str + '_' + targetPackage.itemIdBase);
-            child.att('name', specialUsage ? specialUsage : str);
+            str = createChildId();
+            displayName = specialUsage || sanitizeInstanceName(nodeName) || str;
+            child.att('id', str);
+            child.att('name', displayName);
             child.att('src', packageItem.id);
             child.att('fileName', packageItem.name);
             child.att('xy', (aNode.left - rootNode.left) + ',' + (aNode.top - rootNode.top));
             child.ele({ Button: instProps });
         }
+        else if (startsWithPrefix(nodeName, labelPrefix)) {
+            instProps = {};
+            packageItem = createLabel(aNode, instProps);
+            child = xmlbuilder.create('component');
+            str = createChildId();
+            displayName = specialUsage || sanitizeInstanceName(nodeName) || str;
+            child.att('id', str);
+            child.att('name', displayName);
+            child.att('src', packageItem.id);
+            child.att('fileName', packageItem.name);
+            child.att('xy', (aNode.left - rootNode.left) + ',' + (aNode.top - rootNode.top));
+            if (Object.keys(instProps).length > 0)
+                child.ele({ Label: instProps });
+        }
+        else if (isProgressBarGroup(nodeName)) {
+            packageItem = createProgressBar(aNode);
+            child = xmlbuilder.create('component');
+            str = createChildId();
+            displayName = specialUsage || sanitizeInstanceName(nodeName) || str;
+            child.att('id', str);
+            child.att('name', displayName);
+            child.att('src', packageItem.id);
+            child.att('fileName', packageItem.name);
+            child.att('xy', (aNode.left - rootNode.left) + ',' + (aNode.top - rootNode.top));
+        }
+        else if (startsWithPrefix(nodeName, sliderPrefix)) {
+            packageItem = createSlider(aNode);
+            child = xmlbuilder.create('component');
+            str = createChildId();
+            displayName = specialUsage || sanitizeInstanceName(nodeName) || str;
+            child.att('id', str);
+            child.att('name', displayName);
+            child.att('src', packageItem.id);
+            child.att('fileName', packageItem.name);
+            child.att('xy', (aNode.left - rootNode.left) + ',' + (aNode.top - rootNode.top));
+        }
         else {
-            var cnt = aNode.children().length;
-            for (var i = cnt - 1; i >= 0; i--)
-                parseNode(aNode.children()[i], rootNode, displayList, onElementCallback);
+            // Unified rule: every non-special PSD group → FairyGUI Group
+            child = createFairyGroup(aNode, rootNode, displayList, onElementCallback, parentGroupId);
+            // createFairyGroup already applied parentGroupId; avoid double-set below
+            parentGroupId = null;
         }
     }
     else {
         var typeTool = aNode.get('typeTool');
         if (typeTool) {
             child = xmlbuilder.create('text');
-            str = 'n' + (displayList.children.length + 1);
-            child.att('id', str + '_' + targetPackage.itemIdBase);
-            child.att('name', specialUsage ? specialUsage : str);
+            str = createChildId();
+            displayName = specialUsage || str;
+            child.att('id', str);
+            child.att('name', displayName);
             child.att('text', typeTool.textValue);
             if (specialUsage == 'title') {
                 child.att('xy', '0,' + (aNode.top - rootNode.top - 4));
@@ -348,9 +528,9 @@ function parseNode(aNode, rootNode, displayList, onElementCallback) {
             else {
                 child.att('xy', (aNode.left - rootNode.left - 4) + ',' + (aNode.top - rootNode.top - 4));
                 child.att('size', (aNode.width + 8) + ',' + (aNode.height + 8));
-                str = typeTool.alignment()[0];
-                if (str != 'left')
-                    child.att('align', str);
+                var align = typeTool.alignment()[0];
+                if (align != 'left')
+                    child.att('align', align);
             }
             child.att('vAlign', 'middle');
             child.att('autoSize', 'none');
@@ -365,9 +545,10 @@ function parseNode(aNode, rootNode, displayList, onElementCallback) {
                 child = xmlbuilder.create('loader');
             else
                 child = xmlbuilder.create('image');
-            str = 'n' + (displayList.children.length + 1);
-            child.att('id', str + '_' + targetPackage.itemIdBase);
-            child.att('name', specialUsage ? specialUsage : str);
+            str = createChildId();
+            displayName = specialUsage || str;
+            child.att('id', str);
+            child.att('name', displayName);
             child.att('xy', (aNode.left - rootNode.left) + ',' + (aNode.top - rootNode.top));
             if (specialUsage == 'icon') {
                 child.att('size', aNode.width + ',' + aNode.height);
@@ -383,6 +564,9 @@ function parseNode(aNode, rootNode, displayList, onElementCallback) {
         var opacity = aNode.get('opacity');
         if (opacity < 255)
             child.att('alpha', (opacity / 255).toFixed(2));
+
+        if (parentGroupId)
+            child.att('group', parentGroupId);
 
         if (onElementCallback)
             onElementCallback(child, aNode);
